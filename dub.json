@@ -1,0 +1,9 @@
+{
+	"name": "once",
+	"authors": [
+		"burner"
+	],
+	"description": "A value wrapper that allows a single assignment",
+	"copyright": "Copyright © 2017, burner",
+	"license": "LGPL3"
+}
