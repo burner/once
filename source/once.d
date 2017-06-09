@@ -13,16 +13,28 @@ class AlreadyAssignedException : Exception {
 }
 
 struct Once(T) {
-	import std.traits : Unqual, CopyConstness;
+	import std.traits : Unqual, CopyConstness, hasElaborateDestructor;
 	static if(is(Unqual!(T) == struct)) {
-		ubyte[T.sizeof] buffer;
+		align(8) void[T.sizeof] buffer;
 	} else static if(is(Unqual!(T) == class)) {
-		T buffer;
+		align(8) T buffer;
 	} else {
 		T buffer;
 	}
 
+	~this() {
+		static if(is(Unqual!T == struct) && hasElaborateDestructor!T) {
+			if(this.wasAssigned) {
+				(*cast(Unqual!(T)*)(this.buffer.ptr)).__dtor();
+			}
+		}
+	}
+
 	bool wasAssigned = false;
+
+	@property const(bool) initialized() const @safe pure nothrow @nogc {
+		return this.wasAssigned;
+	}
 
 	alias get this;
 
@@ -56,6 +68,19 @@ struct Once(T) {
 		this.wasAssigned = true;
 	}
 
+	static if(is(Unqual!(T) == struct)) {
+		void emplace(Args...)(auto ref Args args) {
+			if(this.wasAssigned) {
+				throw new AlreadyAssignedException(
+						typeof(this).stringof ~ " was not yet assgined"
+					);
+			}
+			static import std.conv;
+			//*(cast(T*)this.buffer.ptr) = 
+				std.conv.emplace!T(this.buffer, args);
+			this.wasAssigned = true;
+		}
+	}
 
 }
 
@@ -71,7 +96,9 @@ unittest {
 	import std.exception : assertThrown;
 
 	Once!(int) i;
+	assert(!i.initialized);
 	i = 10;
+	assert(i.initialized);
 
 	assert(i == 10);	
 	assert(i.get() == 10);	
@@ -84,14 +111,45 @@ unittest {
 
 unittest {
 	import std.math : approxEqual;
+	import std.format : format;
 	struct Foo {
 		int i;
 		float j;
+		int* ex;
+
+		this(int i, float j, int* ex) {
+			this.i = i;
+			this.j = j;
+			this.ex = ex;
+		}
+
+		~this() {
+			if(this.ex !is null) {
+				++(*this.ex);
+			}
+		}
 	}
 
-	Once!Foo f;
-	f = Foo(10, 13.37);
+	int ex = 0;
+	{
+		Once!Foo f;
+		assert(!f.initialized);
+		f = Foo(10, 13.37, &ex);
+		assert(f.initialized);
 
-	assert(f.i == 10);
-	assert(approxEqual(f.j, 13.37));
+		assert(f.i == 10);
+		assert(approxEqual(f.j, 13.37));
+	}
+	assert(ex == 2);
+
+	{
+		import std.exception : assertThrown;
+		Once!Foo g;
+		g.emplace(1, 23.47, &ex);
+		assert(g.i == 1);
+		assert(approxEqual(g.j, 23.47));
+
+		assertThrown!(AlreadyAssignedException)(g.emplace(2,3.3, &ex));
+	}
+	assert(ex == 3);
 }
